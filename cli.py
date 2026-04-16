@@ -1464,6 +1464,37 @@ def _looks_like_slash_command(text: str) -> bool:
     return "/" not in first_word[1:]
 
 
+def _looks_like_bang_command(text: str) -> bool:
+    """Return True if *text* starts with ``!`` followed by a shell command.
+
+    Bang commands (like Claude Code) allow running shell commands directly
+    from the chat input without going through the LLM loop.
+    Example: ``!ls -lh``, ``!docker ps``, ``!git log --oneline -5``
+    """
+    if not text or not text.startswith("!"):
+        return False
+    return len(text.strip()) > 1
+
+
+def _execute_bang_command(cmd_text: str) -> str:
+    """Execute a ``!command`` directly via subprocess and return output."""
+    import subprocess
+    shell_cmd = cmd_text.strip()[1:]  # Strip leading "!"
+    if not shell_cmd.strip():
+        return ""
+    try:
+        result = subprocess.run(
+            shell_cmd, shell=True, capture_output=True,
+            text=True, timeout=30
+        )
+        output = result.stdout.strip() or result.stderr.strip()
+        return output if output else "(no output)"
+    except subprocess.TimeoutExpired:
+        return "⏱ Command timed out (30s)"
+    except Exception as e:
+        return f"✗ {e}"
+
+
 # ============================================================================
 # Skill Slash Commands — dynamic commands generated from installed skills
 # ============================================================================
@@ -9551,6 +9582,13 @@ class HermesCLI:
                                 f"[User attached file: {_drop_path}]"
                                 + (f"\n{_remainder}" if _remainder else "")
                             )
+
+                    if not _file_drop and isinstance(user_input, str) and _looks_like_bang_command(user_input):
+                        _cprint(f"\n⚡ {user_input}")
+                        output = _execute_bang_command(user_input)
+                        if output:
+                            self.console.print(_rich_text_from_ansi(output))
+                        continue
 
                     if not _file_drop and isinstance(user_input, str) and _looks_like_slash_command(user_input):
                         _cprint(f"\n⚙️  {user_input}")

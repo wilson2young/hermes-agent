@@ -2954,7 +2954,26 @@ class GatewayRunner:
 
         # Check for commands
         command = event.get_command()
-        
+
+        # Bang commands (!ls -lh): execute shell directly, bypass agent loop
+        _raw_text = (event.text or "").strip()
+        if _raw_text.startswith("!") and len(_raw_text) > 1:
+            import subprocess
+            _bang_cmd = _raw_text[1:]
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    _bang_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                output = (stdout or stderr).decode().strip()
+                return f"⚡ `{_raw_text}`\n```\n{output}\n```" if output else f"⚡ `{_raw_text}` — (no output)"
+            except asyncio.TimeoutError:
+                return f"⚡ `{_raw_text}` — ⏱ timed out (30s)"
+            except Exception as e:
+                return f"⚡ `{_raw_text}` — ✗ {e}"
+
         # Emit command:* hook for any recognized slash command.
         # GATEWAY_KNOWN_COMMANDS is derived from the central COMMAND_REGISTRY
         # in hermes_cli/commands.py — no hardcoded set to maintain here.
