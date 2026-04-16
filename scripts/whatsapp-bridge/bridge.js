@@ -28,6 +28,7 @@ import { randomBytes } from 'crypto';
 import qrcode from 'qrcode-terminal';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { matchesAllowedUser, parseAllowedUsers } from './allowlist.js';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // Parse CLI args
 const args = process.argv.slice(2);
