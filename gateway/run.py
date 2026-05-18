@@ -4917,13 +4917,13 @@ class GatewayRunner:
         Uses exponential backoff: 30s → 60s → 120s → 240s → 300s (cap).
         Retryable failures keep retrying at the backoff cap indefinitely
         — but if a platform fails ``_PAUSE_AFTER_FAILURES`` times in a row
-        without ever succeeding, it is *paused*: kept in the retry queue
-        but no longer hammered.  The user surfaces it with ``/platform list``
-        and resumes it with ``/platform resume <name>``.  Non-retryable
-        failures (bad auth, etc.) still drop out of the queue immediately.
+        without ever succeeding, continue retrying at a fixed 5-minute interval
+        indefinitely — network outages are transient and the bot should always
+        recover without manual intervention.  Non-retryable failures (bad auth,
+        etc.) still drop out of the queue immediately.
         """
         _BACKOFF_CAP = 300  # 5 minutes max between retries
-        _PAUSE_AFTER_FAILURES = 10  # circuit-breaker threshold
+        _INITIAL_RETRIES = 10  # exponential backoff phase
 
         await asyncio.sleep(10)  # initial delay — let startup finish
         while self._running:
@@ -4940,10 +4940,6 @@ class GatewayRunner:
                 if not self._running:
                     return
                 info = self._failed_platforms[platform]
-                # Skip paused platforms entirely — they need explicit
-                # /platform resume to come back.
-                if info.get("paused"):
-                    continue
                 if now < info["next_retry"]:
                     continue  # not time yet
 
@@ -5009,20 +5005,16 @@ class GatewayRunner:
                             error_code=adapter.fatal_error_code,
                             error_message=adapter.fatal_error_message or "failed to reconnect",
                         )
-                        backoff = min(30 * (2 ** (attempt - 1)), _BACKOFF_CAP)
+                        if attempt <= _INITIAL_RETRIES:
+                            backoff = min(30 * (2 ** (attempt - 1)), _BACKOFF_CAP)
+                        else:
+                            backoff = _BACKOFF_CAP  # fixed 5min interval forever
                         info["attempts"] = attempt
                         info["next_retry"] = time.monotonic() + backoff
-                        logger.info(
-                            "Reconnect %s failed, next retry in %ds",
-                            platform.value, backoff,
-                        )
-                        if attempt >= _PAUSE_AFTER_FAILURES:
-                            self._pause_failed_platform(
-                                platform,
-                                reason=(
-                                    adapter.fatal_error_message
-                                    or "failed to reconnect"
-                                ),
+                        if attempt <= _INITIAL_RETRIES or attempt % 10 == 0:
+                            logger.info(
+                                "Reconnect %s failed, next retry in %ds",
+                                platform.value, backoff,
                             )
                 except Exception as e:
                     self._update_platform_runtime_status(
@@ -5031,15 +5023,17 @@ class GatewayRunner:
                         error_code=None,
                         error_message=str(e),
                     )
-                    backoff = min(30 * (2 ** (attempt - 1)), _BACKOFF_CAP)
+                    if attempt <= _INITIAL_RETRIES:
+                        backoff = min(30 * (2 ** (attempt - 1)), _BACKOFF_CAP)
+                    else:
+                        backoff = _BACKOFF_CAP  # fixed 5min interval forever
                     info["attempts"] = attempt
                     info["next_retry"] = time.monotonic() + backoff
-                    logger.warning(
-                        "Reconnect %s error: %s, next retry in %ds",
-                        platform.value, e, backoff,
-                    )
-                    if attempt >= _PAUSE_AFTER_FAILURES:
-                        self._pause_failed_platform(platform, reason=str(e))
+                    if attempt <= _INITIAL_RETRIES or attempt % 10 == 0:
+                        logger.warning(
+                            "Reconnect %s error: %s, next retry in %ds",
+                            platform.value, e, backoff,
+                        )
 
             # Check every 10 seconds for platforms that need reconnection
             for _ in range(10):
